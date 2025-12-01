@@ -1,0 +1,32 @@
+dataset_id: "JPCM-08699"
+session_id: "250908_leica"
+
+paths:
+  raw_root: "data/raw"
+  processed_root: "data/processed"
+
+protocols:
+  - "22_42_interleaved"
+  - "another_protocol"
+
+dff:
+  file_name: "recording.tiff"      # or whatever your raw file is called
+  frame_start: 101
+  frame_end: 131
+  fps: 20
+  downscale: true
+
+roi:
+  name_cold: "cold"
+  name_warm: "warm"
+  frame_start: 100
+  frame_end: 140
+  smooth_sigma: 8
+  percentile: 99.99
+  temp_threshold: 32.0
+
+trace:
+  radius_pixels: 10
+  trace_basename_cold: "roi_cold_trace"
+  trace_basename_warm: "roi_warm_trace"
+  save_format: "npy"

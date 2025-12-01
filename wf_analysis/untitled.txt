@@ -1,0 +1,1 @@
+python scripts\run_pipeline_batch.py ` -c wf_analysis\config_example.yaml ` -b data\raw ` --start_dataset JPCM-08780 ` --start_session 251029_leica
