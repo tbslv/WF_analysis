@@ -9,8 +9,8 @@ def compute_and_save_roi_for_protocols(
         dataset_id,
         session_id,
         protocol_list,
-        name="cold",
-        smooth_sigma=8,
+        name="stim",
+        smooth_sigma=1,
         frame_start=100,
         frame_end=140,
         percentile=99.99):
@@ -59,16 +59,28 @@ def compute_and_save_roi_for_protocols(
         thr = np.percentile(smooth_map.ravel(), percentile)
         points = np.where(smooth_map > thr)
 
-
-        # ROI = (x_center, y_center)
-        roi_x = int(np.mean(points[1]))
-        roi_y = int(np.mean(points[0]))
+        if points[0].size == 0:
+            print(
+                f"⚠️ ROI '{name}' ({protocol_name}): "
+                f"No pixels above percentile {percentile}. "
+                "Falling back to global maximum."
+            )
+        
+            # fallback: brightest pixel
+            flat_idx = np.nanargmax(smooth_map)
+            roi_y, roi_x = np.unravel_index(flat_idx, smooth_map.shape)
+        
+        else:
+            roi_x = int(np.mean(points[1]))
+            roi_y = int(np.mean(points[0]))
         roi = (roi_x, roi_y)
         roi_dict[protocol_name] = roi
 
         # --- save location per protocol ---
+        processed_root = Path(processed_root)
+
         base = (
-            Path(processed_root)
+            processed_root
             / dataset_id
             / session_id
             / protocol_name
@@ -149,62 +161,6 @@ def gaussian_smooth_2d(arr, sigma):
 
 import numpy as np
 
-def seperate_trials(res_list, dffs, threshold=32):
-    """
-    Classifies trials into 'cold' and 'warm' based on mean stimulus value,
-    extracts the corresponding DFF arrays, and computes mean DFF for each group.
 
-    Parameters
-    ----------
-    res_list : list of dict
-        Each element must contain a key 'stim' (stimulus trace).
-    dffs : list or array of np.ndarray
-        List of DFF movies, each shaped (T, H, W).
-    threshold : float
-        Temperature threshold separating cold vs warm trials (default = 32°C).
-
-    Returns
-    -------
-    dff_cold_mean : np.ndarray
-        Mean DFF for all cold trials, shape (T, H, W).
-    dff_warm_mean : np.ndarray
-        Mean DFF for all warm trials, shape (T, H, W).
-    cold_trials : np.ndarray
-        Indices of cold trials.
-    warm_trials : np.ndarray
-        Indices of warm trials.
-    """
-
-    # --------------------------
-    # Classify trials
-    # --------------------------
-    trial_ids = np.array([
-        "warm" if np.mean(tr["stim"]) > threshold else "cold"
-        for tr in res_list
-    ])
-
-    cold_trials = np.where(trial_ids == "cold")[0]
-    warm_trials = np.where(trial_ids == "warm")[0]
-
-    # --------------------------
-    # Extract DFF arrays
-    # --------------------------
-    dff_shape = dffs[0].shape  # assume all same shape
-    dffs_cold = np.zeros((len(cold_trials),) + dff_shape)
-    dffs_warm = np.zeros((len(warm_trials),) + dff_shape)
-
-    for i, idx in enumerate(cold_trials):
-        dffs_cold[i] = dffs[idx]
-
-    for i, idx in enumerate(warm_trials):
-        dffs_warm[i] = dffs[idx]
-
-    # --------------------------
-    # Compute means
-    # --------------------------
-    dff_cold_mean = dffs_cold.mean(axis=0) if len(cold_trials) > 0 else None
-    dff_warm_mean = dffs_warm.mean(axis=0) if len(warm_trials) > 0 else None
-
-    return dff_cold_mean, dff_warm_mean, cold_trials, warm_trials
 
 

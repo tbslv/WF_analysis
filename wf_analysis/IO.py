@@ -1,31 +1,15 @@
 import h5py
+from typing import List, Union
+from pathlib import Path
 
-def read_trial_data(dataset_id, session_id, base_dir, protocol_list):
-    """
-    Reads all `data.h5` files across protocols and returns a list of result dicts.
-
-    Each dict has keys like:
-    ['camera_sync', 'camera_sync_sr', 'camera_trigger',
-     'modality', 'stim', 'stim_sr', 'stim_out', 'stim_out_sr', 'peltier_controller', 'attrs']
-
-    Parameters
-    ----------
-    dataset_id : str
-        e.g. "JPCM-08780"
-    session_id : str
-        e.g. "251014_leica"
-    base_dir : str
-        Root directory containing the raw data
-    protocol_list : list[str]
-        List of protocol folder names
-
-    Returns
-    -------
-    results : list[dict]
-        One dict per trial, containing all relevant data
-    """
+def read_trial_data(
+    dataset_id: str,
+    session_id: str,
+    base_dir: Union[str, Path],
+    protocol_list: List[str],
+):
+    base_dir = Path(base_dir)
     results = []
-    os.chdir(r"Z:\Individual_Folders\Tobi\WF_axonimaging\axonal_imaging_tobi")
 
     for protocol_name in protocol_list:
         print(f"\n--- Reading protocol: {protocol_name} ---")

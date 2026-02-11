@@ -1,32 +1,61 @@
-dataset_id: "JPCM-08699"
-session_id: "250908_leica"
+dataset_id: "JPCM-09177"
+session_id: "260123_leica"
 
 paths:
-  raw_root: "data/raw"
-  processed_root: "data/processed"
+  raw_root: "Z:/Individual_Folders/Tobi/WF_axonimaging/Functional_Imaging/data/raw"
+  processed_root: "Z:/Individual_Folders/Tobi/WF_axonimaging/Functional_Imaging/data/processed"
+  save_dir: "Z:/Individual_Folders/Tobi/WF_axonimaging/Functional_Imaging/reports/figures"
 
 protocols:
-  - "22_42_interleaved"
-  - "another_protocol"
+  - "repetition_sound"
 
+# Stage 0: motion correction (ONLY via wf_analysis/motion.py)
+motion:
+  file_name: "recording.tiff"
+  shift_method: "fourier"         # "integer" or "fourier"
+  upsample_factor: 20             # subpixel precision (1/upsample_factor)
+  n_parallel_workers: null
+  motion_region: null             # e.g. [[50, 50], [450, 450]] or null for full frame
+  corrected_basename: "motion_corrected.npy" # DO NOT CHANGE [motion_corrected.npy]
+
+
+mask:
+  thr_val: 0.1
+  offset: 50
+  smooth_radius: 10
+  overwrite: true
+
+# Stage 1: ΔF/F
 dff:
-  file_name: "recording.tiff"      # or whatever your raw file is called
-  frame_start: 101
-  frame_end: 131
-  fps: 20
+  file_name: "recording.tiff"     # used only as fallback if motion-corrected movie missing
+  baseline_start: 0
+  baseline_end: 50
+  response_start: 101
+  response_end: 131
   downscale: true
 
 roi:
-  name_cold: "cold"
-  name_warm: "warm"
   frame_start: 100
   frame_end: 140
-  smooth_sigma: 8
+  smooth_sigma: 1
   percentile: 99.99
-  temp_threshold: 32.0
 
 trace:
-  radius_pixels: 10
-  trace_basename_cold: "roi_cold_trace"
-  trace_basename_warm: "roi_warm_trace"
+  radius_pixels: 15
+  trace_basename: "roi_trace"
   save_format: "npy"
+  roi_source: "auto"   # options: "auto" | "manual" | "prefer_manual"
+
+stimulus:
+  stim_key: "stim"
+  reducer: "mean"
+  start: 5000
+  end: 7000
+
+movie:
+  output_name: "cold_warm.mp4"
+  cmap: "inferno"
+  vmin: 0.0
+  vmax: 0.03
+  frames_per_second: 20
+  sampling_rate: 1000

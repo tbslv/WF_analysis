@@ -1,176 +1,431 @@
-from pathlib import Path
-from typing import List, Tuple
+from __future__ import annotations
 
+"""
+Plot ROI traces for widefield datasets.
+
+Supports:
+- auto ROI:    roi_trace_stim_<stim>.npy
+- manual ROI:  roi_trace_manual_stim_<stim>.npy
+"""
+
+from pathlib import Path
+from typing import List
 import numpy as np
 import matplotlib.pyplot as plt
+import math
 
+from wf_analysis.IO import read_trial_data
+from wf_analysis.utils import group_trials_by_stimulus
+
+
+# ============================================================
+# Constants
+# ============================================================
+
+FRAME_RATE = 20.0
+STIM_ONSET_FRAME = 100
+T_PRE = 2.0
+T_POST = 5.0
+
+
+# ============================================================
+# Helpers
+# ============================================================
+
+def _stim_window_frames():
+    pre = int(T_PRE * FRAME_RATE)
+    post = int(T_POST * FRAME_RATE)
+    return STIM_ONSET_FRAME - pre, STIM_ONSET_FRAME + post
+
+
+def _trace_filename(trace_basename: str, stim: float, roi_mode: str) -> str:
+    if roi_mode == "auto":
+        return f"{trace_basename}_stim_{stim}.npy"
+    elif roi_mode == "manual":
+        return f"{trace_basename}_manual_stim_{stim}.npy"
+    else:
+        raise ValueError("roi_mode must be 'auto' or 'manual'")
+
+
+# ============================================================
+# Loaders
+# ============================================================
 
 def _load_traces_for_condition(
     processed_root: str | Path,
     dataset_id: str,
+    session_id: str,
+    protocol: str,                    # <<< NEW
     trace_basename: str,
-    extension: str = "npy",
+    stim_value: float,
+    roi_mode: str,
 ) -> List[np.ndarray]:
-    """
-    Helper: load all traces for a given dataset and condition (cold/warm).
 
-    It recursively searches:
-        processed_root / dataset_id / ** / *{trace_basename}*.{extension}
+    base = (
+        Path(processed_root)
+        / dataset_id
+        / session_id
+        / protocol
+    )
 
-    Parameters
-    ----------
-    processed_root : str or Path
-        Root directory of processed data, e.g. "data/processed".
-    dataset_id : str
-        Animal ID, e.g. "JPCM-08699".
-    trace_basename : str
-        Base name used when saving traces, e.g. "roi_cold_trace".
-    extension : str
-        File extension, "npy" or "txt". Only "npy" is implemented here.
+    fname = _trace_filename(trace_basename, stim_value, roi_mode)
+    paths = sorted(base.glob(f"**/{fname}"))
 
-    Returns
-    -------
-    list of np.ndarray
-        List of 1D traces.
-    """
-    processed_root = Path(processed_root)
-    dataset_dir = processed_root / dataset_id
+    traces = []
+    for p in paths:
+        arr = np.load(p).squeeze()
+        if arr.ndim == 1:
+            traces.append(arr)
 
-    if not dataset_dir.exists():
-        raise FileNotFoundError(f"Processed directory for {dataset_id} not found: {dataset_dir}")
-
-    pattern = f"**/*{trace_basename}*.{extension}"
-    trace_paths = list(dataset_dir.glob(pattern))
-
-    traces: List[np.ndarray] = []
-    for p in trace_paths:
-        if extension == "npy":
-            arr = np.load(p)
-        elif extension == "txt":
-            arr = np.loadtxt(p)
-        else:
-            raise ValueError(f"Unsupported extension: {extension}")
-
-        # Ensure 1D
-        arr = np.squeeze(arr)
-        if arr.ndim != 1:
-            raise ValueError(f"Trace in {p} is not 1D after squeeze (shape={arr.shape}).")
-        traces.append(arr)
+    if not traces:
+        raise RuntimeError(
+            f"No traces found for stim={stim_value} "
+            f"(dataset={dataset_id}, session={session_id}, protocol={protocol})"
+        )
 
     return traces
 
 
-def _compute_mean_trace(traces: List[np.ndarray]) -> np.ndarray:
-    """
-    Stack traces and compute mean over axis=0.
-    Assumes all traces have same length.
-    """
-    if not traces:
-        raise ValueError("No traces provided to compute mean.")
-
-    lengths = {t.shape[0] for t in traces}
-    if len(lengths) != 1:
-        raise ValueError(f"Traces have different lengths: {lengths}")
-
-    stacked = np.stack(traces, axis=0)  # [N, T]
-    return stacked.mean(axis=0)         # [T]
-
-
-def plot_traces_for_animal(
+def _load_mean_stimulus_traces(
     dataset_id: str,
-    processed_root: str | Path = "data/processed",
-    trace_basename_cold: str = "roi_cold_trace",
-    trace_basename_warm: str = "roi_warm_trace",
-    extension: str = "npy",
-    show: bool = True,
-) -> Tuple[List[np.ndarray], List[np.ndarray]]:
+    session_id: str,
+    raw_root: str | Path,
+    protocol_list: list[str],
+    stim_values: list[float],
+    stim_start: int = 5000,
+    stim_end: int = 7000,
+) -> np.ndarray:
     """
-    Load and plot traces for one animal (dataset_id) across all sessions.
-
-    For each condition (cold / warm):
-      - loads all trace files matching *trace_basename* under processed_root/dataset_id
-      - plots each trace as a thin line
-      - plots the mean trace as a thick line on top
-
-    Parameters
-    ----------
-    dataset_id : str
-        Animal ID, e.g. "JPCM-08699".
-    processed_root : str or Path
-        Root directory of processed data, e.g. "data/processed".
-    trace_basename_cold : str
-        Basename for cold traces, e.g. "roi_cold_trace".
-    trace_basename_warm : str
-        Basename for warm traces, e.g. "roi_warm_trace".
-    extension : str
-        File extension, "npy" or "txt".
-    show : bool
-        If True, calls plt.show() at the end.
-
-    Returns
-    -------
-    (cold_traces, warm_traces) : tuple of lists of np.ndarray
-        The loaded traces for each condition.
+    Returns stimulus traces shaped (n_stim, T)
     """
-    processed_root = Path(processed_root)
 
-    # -------------------------
-    # 1) Load all cold traces
-    # -------------------------
-    cold_traces = _load_traces_for_condition(
-        processed_root=processed_root,
+    res_list = read_trial_data(
         dataset_id=dataset_id,
-        trace_basename=trace_basename_cold,
-        extension=extension,
+        session_id=session_id,
+        base_dir=raw_root,
+        protocol_list=protocol_list,
     )
 
-    # -------------------------
-    # 2) Load all warm traces
-    # -------------------------
-    warm_traces = _load_traces_for_condition(
-        processed_root=processed_root,
-        dataset_id=dataset_id,
-        trace_basename=trace_basename_warm,
-        extension=extension,
+    stim_groups = group_trials_by_stimulus(
+        res_list=res_list,
+        dffs=[0] * len(res_list),
+        start=stim_start,
+        end=stim_end,
     )
 
-    # -------------------------
-    # 3) Plot cold
-    # -------------------------
-    if cold_traces:
-        mean_cold = _compute_mean_trace(cold_traces)
+    stim_traces = [res["stim"] for res in res_list]
 
-        plt.figure(figsize=(8, 5))
-        for tr in cold_traces:
-            plt.plot(tr, linewidth=0.5, alpha=0.4)
-        plt.plot(mean_cold, linewidth=3, label="Mean cold")
-        plt.title(f"{dataset_id} – Cold traces (N={len(cold_traces)})")
-        plt.xlabel("Frame")
-        plt.ylabel("ΔF/F (a.u.)")
-        plt.legend()
-        plt.tight_layout()
-    else:
-        print(f"[INFO] No cold traces found for {dataset_id}.")
+    return np.vstack(
+        [
+            np.array(stim_traces)[stim_groups[stim]["indices"]].mean(axis=0)
+            for stim in stim_values
+        ]
+    )
 
-    # -------------------------
-    # 4) Plot warm
-    # -------------------------
-    if warm_traces:
-        mean_warm = _compute_mean_trace(warm_traces)
 
-        plt.figure(figsize=(8, 5))
-        for tr in warm_traces:
-            plt.plot(tr, linewidth=0.5, alpha=0.4)
-        plt.plot(mean_warm, linewidth=3, label="Mean warm")
-        plt.title(f"{dataset_id} – Warm traces (N={len(warm_traces)})")
-        plt.xlabel("Frame")
-        plt.ylabel("ΔF/F (a.u.)")
-        plt.legend()
-        plt.tight_layout()
-    else:
-        print(f"[INFO] No warm traces found for {dataset_id}.")
+# ============================================================
+# Plot helpers
+# ============================================================
 
-    if show:
-        plt.show()
+def _apply_protocol_style(ax, protocol: str):
+    ax.axvspan(0, 2, color="grey", alpha=0.5, zorder=0)
 
-    return cold_traces, warm_traces
+
+def _protocol_colors(protocol: str, n: int):
+    if "tactile" in protocol.lower():
+        return ["black"] * n
+    if "sound" in protocol.lower():
+        return ["green"] * n
+    return ["tab:blue", "tab:red"][:n]
+
+
+def _save_figure(fig, save_dir, dataset_id, protocol, fname):
+    out_dir = Path(save_dir) / dataset_id / protocol
+    out_dir.mkdir(parents=True, exist_ok=True)
+    fig.savefig(out_dir / fname, dpi=300)
+    print(f"Saved: {out_dir / fname}")
+
+
+# ============================================================
+# Plot: session means (single animal)
+# ============================================================
+
+def plot_session_means_cold_warm(
+    dataset_id: str,
+    processed_root: str | Path,
+    raw_root: str | Path,
+    protocol_list: list[str],
+    stim_values: list[float],
+    trace_basename: str = "roi_trace",
+    roi_mode: str = "auto",
+    save_dir: str | Path = ".",
+    save: bool = True,
+):
+
+    protocol = protocol_list[0]
+    colors = _protocol_colors(protocol, len(stim_values))
+
+    sessions = sorted((Path(processed_root) / dataset_id).iterdir())
+    sessions = [s.name for s in sessions if s.is_dir()]
+
+    roi_means, stim_means = [], []
+
+    for sess in sessions:
+        roi_means.append([
+            np.mean(
+                _load_traces_for_condition(
+                    processed_root,
+                    dataset_id,
+                    sess,
+                    protocol,
+                    trace_basename,
+                    stim,
+                    roi_mode,
+                ),
+                axis=0,
+            )
+            for stim in stim_values
+        ])
+
+        stim_means.append(
+            _load_mean_stimulus_traces(
+                dataset_id, sess, raw_root, protocol_list, stim_values
+            )
+        )
+
+    roi_means = np.array(roi_means)
+    stim_means = np.array(stim_means)
+
+    roi_ylim = (np.min(roi_means), np.max(roi_means))
+
+    f0, f1 = _stim_window_frames()
+    roi_means = roi_means[:, :, f0:f1]
+    stim_means = stim_means[:, :, int(5000 - 1000 * T_PRE): int(5000 + 1000 * T_POST)]
+
+    t_roi = np.linspace(-T_PRE, T_POST, roi_means.shape[-1])
+    t_stim = np.linspace(-T_PRE, T_POST, stim_means.shape[-1])
+
+    fig = plt.figure(figsize=(12, 6))
+    gs = fig.add_gridspec(2, len(stim_values), height_ratios=[1, 4], hspace=0.15)
+
+    for i, stim in enumerate(stim_values):
+        ax_s = fig.add_subplot(gs[0, i])
+        ax_r = fig.add_subplot(gs[1, i])
+
+        _apply_protocol_style(ax_s, protocol)
+        _apply_protocol_style(ax_r, protocol)
+
+        for s in range(len(sessions)):
+            ax_s.plot(t_stim, stim_means[s, i], color=colors[i], alpha=0.5)
+            ax_r.plot(t_roi, roi_means[s, i], color=colors[i], alpha=0.5)
+
+        ax_s.plot(t_stim, stim_means[:, i].mean(axis=0), color=colors[i], lw=3)
+        ax_r.plot(t_roi, roi_means[:, i].mean(axis=0), color=colors[i], lw=3)
+
+        ax_s.axvline(0, color="k", ls="--")
+        ax_r.axvline(0, color="k", ls="--")
+
+        ax_r.set_ylim(roi_ylim)
+
+        ax_s.set_ylabel("Stimulus")
+        ax_r.set_ylabel("ΔF/F")
+        ax_r.set_xlabel("Time (s)")
+        ax_s.set_title(f"{stim}")
+
+    plt.tight_layout()
+
+    if save:
+        _save_figure(fig, save_dir, dataset_id, protocol,
+                     f"session_means_{roi_mode}.png")
+
+    plt.show()
+
+
+# ============================================================
+# Plot: stimulus-aligned individual trials
+# ============================================================
+
+def plot_cold_vs_warm_stim_aligned(
+    dataset_id: str,
+    processed_root: str | Path,
+    raw_root: str | Path,
+    protocol_list: list[str],
+    stim_values: list[float],
+    trace_basename: str = "roi_trace",
+    roi_mode: str = "auto",
+    save_dir: str | Path = ".",
+    save: bool = True,
+):
+
+    protocol = protocol_list[0]
+    colors = _protocol_colors(protocol, len(stim_values))
+
+    sessions = sorted((Path(processed_root) / dataset_id).iterdir())
+    sessions = [s.name for s in sessions if s.is_dir()]
+
+    all_traces = []
+    for stim in stim_values:
+        traces = []
+        for sess in sessions:
+            traces.extend(
+                _load_traces_for_condition(
+                    processed_root,
+                    dataset_id,
+                    sess,
+                    protocol,
+                    trace_basename,
+                    stim,
+                    roi_mode,
+                )
+            )
+        all_traces.append(np.stack(traces))
+
+    all_traces = np.stack(all_traces)
+    f0, f1 = _stim_window_frames()
+    all_traces = all_traces[:, :, f0:f1]
+    t = np.linspace(-T_PRE, T_POST, all_traces.shape[-1])
+
+    stim_means = _load_mean_stimulus_traces(
+        dataset_id, sessions[0], raw_root, protocol_list, stim_values
+    )
+    stim_means = stim_means[:, int(5000 - 1000 * T_PRE): int(5000 + 1000 * T_POST)]
+    t_stim = np.linspace(-T_PRE, T_POST, stim_means.shape[-1])
+
+    fig = plt.figure(figsize=(12, 6))
+    gs = fig.add_gridspec(2, len(stim_values), height_ratios=[1, 4], hspace=0.15)
+
+    for i, stim in enumerate(stim_values):
+        ax_s = fig.add_subplot(gs[0, i])
+        ax_r = fig.add_subplot(gs[1, i])
+
+        _apply_protocol_style(ax_s, protocol)
+        _apply_protocol_style(ax_r, protocol)
+
+        ax_s.plot(t_stim, stim_means[i], color=colors[i], lw=3)
+        ax_s.axvline(0, color="k", ls="--")
+
+        for tr in all_traces[i]:
+            ax_r.plot(t, tr, color=colors[i], alpha=0.3)
+
+        ax_r.plot(t, all_traces[i].mean(axis=0), color=colors[i], lw=3)
+        ax_r.axvline(0, color="k", ls="--")
+
+        ax_s.set_ylabel("Stimulus")
+        ax_r.set_ylabel("ΔF/F")
+        ax_r.set_xlabel("Time (s)")
+        ax_s.set_title(f"{stim}")
+
+    plt.tight_layout()
+
+    if save:
+        _save_figure(fig, save_dir, dataset_id, protocol,
+                     f"stim_aligned_{roi_mode}.png")
+
+    plt.show()
+
+
+# ============================================================
+# Plot: group session means (multi-animal)
+# ============================================================
+
+def plot_group_session_means_multi_animals(
+    groups: dict[str, list[str]],
+    processed_root: str | Path,
+    raw_root: str | Path,
+    protocol_list: list[str],
+    stim_values: list[float],
+    trace_basename: str = "roi_trace",
+    roi_mode: str = "auto",
+    save_dir: str | Path = ".",
+    save: bool = True,
+):
+
+    protocol = protocol_list[0]
+    colors = _protocol_colors(protocol, len(stim_values))
+
+    fig = plt.figure(figsize=(14, 6))
+    gs = fig.add_gridspec(2, len(groups), height_ratios=[1, 4], hspace=0.15)
+
+    all_roi_vals, all_stim_vals = [], []
+    cached = {}
+
+    for group_name, animals in groups.items():
+        roi_means, stim_means = [], []
+
+        for dataset_id in animals:
+            sessions = sorted((Path(processed_root) / dataset_id).iterdir())
+            sessions = [s.name for s in sessions if s.is_dir()]
+
+            for sess in sessions:
+                roi_means.append([
+                    np.nanmean(
+                        _load_traces_for_condition(
+                            processed_root,
+                            dataset_id,
+                            sess,
+                            protocol,
+                            trace_basename,
+                            stim,
+                            roi_mode,
+                        ),
+                        axis=0,
+                    )
+                    for stim in stim_values
+                ])
+
+                stim_means.append(
+                    _load_mean_stimulus_traces(
+                        dataset_id, sess, raw_root, protocol_list, stim_values
+                    )
+                )
+
+        roi_means = np.array(roi_means)
+        stim_means = np.array(stim_means)
+
+        f0, f1 = _stim_window_frames()
+        roi_means = roi_means[:, :, f0:f1]
+        stim_means = stim_means[:, :, int(5000 - 1000 * T_PRE): int(5000 + 1000 * T_POST)]
+
+        cached[group_name] = (roi_means, stim_means)
+        all_roi_vals.append(roi_means)
+        all_stim_vals.append(stim_means)
+
+    roi_ylim = (min(np.min(a) for a in all_roi_vals),
+                max(np.max(a) for a in all_roi_vals))
+    stim_ylim = (min(np.min(a) for a in all_stim_vals),
+                 max(np.max(a) for a in all_stim_vals))
+
+    for col, (group, (roi_means, stim_means)) in enumerate(cached.items()):
+        t_roi = np.linspace(-T_PRE, T_POST, roi_means.shape[-1])
+        t_stim = np.linspace(-T_PRE, T_POST, stim_means.shape[-1])
+
+        ax_s = fig.add_subplot(gs[0, col])
+        ax_r = fig.add_subplot(gs[1, col])
+
+        _apply_protocol_style(ax_s, protocol)
+        _apply_protocol_style(ax_r, protocol)
+
+        for i in range(len(stim_values)):
+            for s in range(roi_means.shape[0]):
+                ax_s.plot(t_stim, stim_means[s, i], color=colors[i], alpha=0.4)
+                ax_r.plot(t_roi, roi_means[s, i], color=colors[i], alpha=0.4)
+
+            ax_s.plot(t_stim, stim_means[:, i].mean(axis=0),
+                      color=colors[i], lw=3)
+            ax_r.plot(t_roi, roi_means[:, i].mean(axis=0),
+                      color=colors[i], lw=3)
+
+        ax_s.set_ylim(stim_ylim)
+        ax_r.set_ylim(roi_ylim)
+        ax_s.set_ylabel("Stimulus")
+        ax_r.set_ylabel("ΔF/F")
+        ax_r.set_xlabel("Time (s)")
+        ax_s.set_title(group)
+
+    plt.tight_layout()
+
+    if save:
+        _save_figure(fig, save_dir, "GROUPS", protocol,
+                     f"group_session_means_{roi_mode}.png")
+
+    plt.show()

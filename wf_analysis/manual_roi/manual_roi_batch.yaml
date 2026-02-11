@@ -1,0 +1,35 @@
+# Paths
+paths:
+  processed_root: "Z:/Individual_Folders/Tobi/WF_axonimaging/Functional_Imaging/data/processed"
+  raw_root: "Z:/Individual_Folders/Tobi/WF_axonimaging/Functional_Imaging/data/raw"
+
+# Parameters for stimulus averaging
+stimulus_window:
+  frame_start: 100
+  frame_end: 140
+  stimulus_start: 5000
+  stimulus_end: 7000
+
+# Manual ROI parameters
+roi:
+  radius: 12
+
+# Datasets to process
+datasets:
+  JPCM-09177:
+    260123_leica:
+      protocol: "repetition_tactile"
+      stimuli: [0.0]
+ # JPCM-08704:
+  #  250908_leica:
+   #   protocol: "22_42_interleaved"
+    #  stimuli: [22.0, 42.0]
+  #JPCM-08704:
+   # 250911_leica:
+    #  protocol: "22_42_interleaved"
+     # stimuli: [22.0, 42.0]
+  # Example of adding more:
+  # JPCM-08705:
+  #   250906_leica:
+  #     protocol: "22_42_interleaved"
+  #     stimuli: [22.0, 42.0]

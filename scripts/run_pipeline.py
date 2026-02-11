@@ -10,21 +10,37 @@ from wf_analysis import run_full_pipeline
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Run the WF analysis pipeline (DFF → ROI → Traces)."
+        description="Run WF analysis pipeline (selectable stages)"
     )
+
     parser.add_argument(
-        "-c",
-        "--config",
+        "-c", "--config",
         required=True,
-        help="Path to YAML config file.",
+        help="Path to YAML config file",
     )
+
+    parser.add_argument("--skip-motion", action="store_true")
+    parser.add_argument("--skip-mask", action="store_true")
+    parser.add_argument("--skip-dff", action="store_true")
+    parser.add_argument("--skip-roi", action="store_true")
+    parser.add_argument("--skip-traces", action="store_true")
+    parser.add_argument(
+        "--run-movies",
+        action="store_true",
+        help="Generate stimulus-aligned movies",
+    )
+
     args = parser.parse_args()
 
-    config_path = Path(args.config).expanduser().resolve()
-    if not config_path.exists():
-        raise FileNotFoundError(f"Config file not found: {config_path}")
-
-    run_full_pipeline(config_path)
+    run_full_pipeline(
+        args.config,
+        run_motion=not args.skip_motion,
+        run_mask=not args.skip_mask,
+        run_dff=not args.skip_dff,
+        run_roi=not args.skip_roi,
+        run_traces=not args.skip_traces,
+        run_movies=args.run_movies,
+    )
 
 
 if __name__ == "__main__":

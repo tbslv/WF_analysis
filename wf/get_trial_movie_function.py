@@ -9,7 +9,7 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-def downscale_movie(mov: np.ndarray) -> np.ndarray | bool:
+def downscale_movie(mov):
     """
     Downscale a 3D movie array to 512x512 resolution using block averaging.
 
@@ -45,5 +45,5 @@ def get_trial_movie(tiff_path, do_downscale=False) -> np.ndarray:
     """
     movie_path = Path(tiff_path)
     print(f"Loading movie from: {movie_path}")
-    mov = imread(movie_path)
+    mov = imread(str(movie_path))  # <-- cast Path to str
     return downscale_movie(mov) if do_downscale else mov.astype(np.float32)

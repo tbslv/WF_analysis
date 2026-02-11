@@ -1,38 +1,39 @@
 from pathlib import Path
 from typing import List
 
-from .dff_helper import process_dff_trials  # your existing helper
-# If you want: from .IO import read_trial_data_or_whatever
+from .dff_helper import process_dff_trials
 
 
 def run_dff_stage(
     dataset_id: str,
     session_id: str,
-    base_raw_dir: str,
+    base_raw_dir: str | Path,
+    processed_root: str | Path,
     protocol_list: List[str],
-    file_name: str = "recording.tiff",
-    frame_start: int = 101,
-    frame_end: int = 131,
-    fps: int = 20,
-    do_downscale: bool = True,
+    file_name: str,
+    baseline_start: int,
+    baseline_end: int,
+    response_start: int,
+    response_end: int,
+    do_downscale: bool,
 ):
     """
-    Stage 1:
-    - For each protocol & trial:
-        * load raw/downsized movie
-        * compute DFF movie
-        * save mean.npy, dff.npy, mean_image.pdf in processed folder
-    - Returns list of DFF arrays in processing order.
+    Stage 1: ΔF/F computation.
+
+    This function is a thin adapter around process_dff_trials(),
+    matching the *actual* signature used in dff_helper.py.
     """
-    dffs = process_dff_trials(
-        dataset_id=dataset_id,
-        session_id=session_id,
-        base_dir=base_raw_dir,
-        protocol_list=protocol_list,
-        file_name=file_name,
-        frame_start=frame_start,
-        frame_end=frame_end,
-        fps=fps,
-        do_downscale=do_downscale,
+
+    return process_dff_trials(
+        dataset_id,
+        session_id,
+        base_raw_dir,
+        processed_root,
+        protocol_list,
+        file_name,
+        baseline_start,
+        baseline_end,
+        response_start,
+        response_end,
+        do_downscale,
     )
-    return dffs

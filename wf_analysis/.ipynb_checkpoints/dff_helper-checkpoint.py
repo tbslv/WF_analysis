@@ -1,94 +1,153 @@
-import os
 
-os.chdir(r"C:\Users\tobiasleva\Work\widefield_pic_gp4_3_tst\notebooks\somatotopy\scripts")
-import glob
+"""
+DFF helper functions.
+
+This version is self-contained:
+- reads motion-corrected movies from processed_root (preferred) or raw_root
+- computes ΔF/F movies
+- saves dff.npy and mean.npy per trial
+
+Expected folder layout for motion-corrected movies:
+processed_root/<dataset>/<session>/<protocol>/<trial_id>/motion_corrected.npy  (or .tiff)
+
+Raw TIFFs are still supported as a fallback if motion-corrected movies are missing.
+"""
+
+from __future__ import annotations
+
 from pathlib import Path
+from typing import List, Optional, Tuple
+
 import numpy as np
-import matplotlib.pyplot as plt
-from wf.get_trial_movie_function import  get_trial_movie, downscale_movie
-from wf.dff import calc_dff, calc_dff_movie
-import h5py
+
+try:
+    import tifffile as tiff
+except Exception as e:
+    raise ImportError("Please install 'tifffile' (pip install tifffile).") from e
 
 
-def process_dff_trials(dataset_id, session_id, base_dir, protocol_list, file_name,
-                       frame_start=101, frame_end=131, fps=20, do_downscale=True):
+def _load_movie(path: Path) -> np.ndarray:
+    """Load either .npy or multi-page TIFF as (T,H,W) float32."""
+    if path.suffix.lower() == ".npy":
+        mov = np.load(path)
+    else:
+        mov = tiff.imread(str(path))
+    if mov.ndim == 2:
+        mov = mov[None, ...]
+    if mov.ndim != 3:
+        raise ValueError(f"Expected (T,H,W) movie; got shape={mov.shape} from {path}")
+    return mov.astype(np.float32, copy=False)
+
+
+def _downscale_2x(mov: np.ndarray) -> np.ndarray:
     """
-    Processes all TIFF trials into ΔF/F arrays, saves results, and returns the DFF stacks.
-
-    Parameters
-    ----------
-    dataset_id : str
-        Dataset identifier (e.g., "JPCM-08780")
-    session_id : str
-        Session identifier (e.g., "251014_leica")
-    base_dir : str
-        Root directory containing the raw TIFFs (e.g., "data/raw")
-    protocol_list : list of str
-        List of protocols to process
-    frame_start, frame_end : int
-        Frame range to extract (default: 5s–7s window at 20 fps)
-    fps : int
-        Frames per second (used only for reference)
-    do_downscale : bool
-        Whether to downscale movies when loading
-
-    Returns
-    -------
-    dffs : list of np.ndarray
-        List of 3D ΔF/F arrays (T, H, W) for each trial
+    Simple 2x downscale by 2x2 binning. Requires even H/W; otherwise crops last row/col.
     """
-    os.chdir(r"Z:\Individual_Folders\Tobi\WF_axonimaging\axonal_imaging_tobi")
-    def extract_trial_id(tiff_path):
-        return Path(tiff_path).parent.name
+    T, H, W = mov.shape
+    H2 = (H // 2) * 2
+    W2 = (W // 2) * 2
+    mov = mov[:, :H2, :W2]
+    mov = mov.reshape(T, H2 // 2, 2, W2 // 2, 2).mean(axis=(2, 4))
+    return mov.astype(np.float32, copy=False)
 
-    dffs = []
 
-    for protocol_name in protocol_list:
-        print(f"\n--- Processing protocol: {protocol_name} ---")
+def calc_dff_movie(
+    mov: np.ndarray,
+    baseline_frames: Tuple[int, int] = (0, 50),
+    eps: float = 1e-6,
+) -> np.ndarray:
+    """
+    Compute ΔF/F for a movie.
 
-        tiff_paths = glob.glob(
-            f"{base_dir}/{dataset_id}/{session_id}/{protocol_name}/**/*{file_name}*",
-            recursive=True
-        )
+    baseline_frames: (start, end) frames used for F0.
+    """
+    start, end = baseline_frames
+    if end <= start or end > mov.shape[0]:
+        raise ValueError(f"Invalid baseline_frames={baseline_frames} for movie length T={mov.shape[0]}")
+    f0 = mov[start:end].mean(axis=0)
+    f0 = np.maximum(f0, eps)
+    dff = (mov - f0) / f0
+    return dff.astype(np.float32, copy=False)
 
-        if not tiff_paths:
-            print(f"No TIFF files found for protocol {protocol_name}")
+
+def process_dff_trials(
+    dataset_id: str,
+    session_id: str,
+    raw_root: str | Path,
+    processed_root: str | Path,
+    protocol_list: List[str],
+    file_name: str,
+    baseline_start: int,
+    baseline_end: int,
+    response_start: int,
+    response_end: int,
+    do_downscale: bool,
+    corrected_basename: str = "motion_corrected.npy",
+) -> List[np.ndarray]:
+    """
+    Compute dff.npy per trial.
+
+    Search order per trial:
+    1) processed_root/.../<trial_id>/<corrected_basename> (default motion_corrected.npy)
+       also accepts motion_corrected.tiff if corrected_basename is npy but tiff exists.
+    2) raw_root/.../**/<file_name> as fallback
+
+    Saves:
+      processed_root/<dataset>/<session>/<protocol>/<trial_id>/dff.npy
+      processed_root/<dataset>/<session>/<protocol>/<trial_id>/mean.npy  (mean dff in response window)
+    """
+    raw_root = Path(raw_root)
+    processed_root = Path(processed_root)
+
+    dffs: List[np.ndarray] = []
+
+    for protocol in protocol_list:
+        raw_proto_dir = raw_root / dataset_id / session_id / protocol
+        if not raw_proto_dir.exists():
+            print(f"⚠️ Raw protocol folder not found: {raw_proto_dir}")
             continue
 
-        for tiff in tiff_paths:
-            print(f"Processing {tiff}")
-            trial_id = extract_trial_id(tiff)
+        raw_tiffs = sorted(raw_proto_dir.rglob(f"*{file_name}*"))
+        if not raw_tiffs:
+            print(f"⚠️ No raw TIFFs matching '*{file_name}*' under {raw_proto_dir}")
+            continue
 
-            # Load movie (user’s functions assumed available)
-            mov = get_trial_movie(tiff, do_downscale=do_downscale)
-            dff = calc_dff_movie(mov)
+        print(f"\n=== DFF: {protocol} (N={len(raw_tiffs)}) ===")
 
-            # Extract window and rotate
-            dff_subset = dff[frame_start:frame_end]
-            dff_rot = np.rot90(dff_subset, k=-1, axes=(1, 2))
-            mn = np.mean(dff_rot, axis=0)
+        for raw_tiff in raw_tiffs:
+            trial_id = raw_tiff.parent.name
+            out_dir = processed_root / dataset_id / session_id / protocol / trial_id
+            out_dir.mkdir(parents=True, exist_ok=True)
 
-            # Output folder
-            output_base = Path("data/processed") / dataset_id / session_id / protocol_name / trial_id
-            output_base.mkdir(parents=True, exist_ok=True)
+            # Prefer masked to motion-corrected if present; fall back to raw tiff movie 
+            masked = out_dir / "masked.npy"
+            mc_npy = out_dir / corrected_basename
+            mc_tiff = out_dir / "motion_corrected.tiff"
+            
+            if masked.exists():
+                in_movie_path = masked
+            elif mc_npy.exists():
+                in_movie_path = mc_npy
+            elif mc_tiff.exists():
+                in_movie_path = mc_tiff
+            else:
+                in_movie_path = raw_tiff
 
-            # Save outputs
-            np.save(output_base / "mean.npy", mn)
-            np.save(output_base / "dff.npy", dff)
+            mov = _load_movie(in_movie_path)
 
-            # Save mean figure
-            fig, ax = plt.subplots()
-            im = ax.imshow(mn, cmap='inferno')
-            ax.set_title(f"Mean image: {trial_id}")
-            ax.axis('on')
-            plt.colorbar(im, ax=ax, label='dF/F')
-            fig.savefig(output_base / "mean_image.pdf")
-            plt.close(fig)
+            if do_downscale:
+                mov = _downscale_2x(mov)
+
+            dff = calc_dff_movie(
+                mov,
+                baseline_frames=(baseline_start, baseline_end),
+            )
+
+            mean_img = dff[response_start:response_end].mean(axis=0)
+
+            np.save(out_dir / "dff.npy", dff)
+            np.save(out_dir / "mean.npy", mean_img)
 
             dffs.append(dff)
 
-    print("All trials processed and saved into their own folders.")
     return dffs
-
-
-

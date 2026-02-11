@@ -1,26 +1,21 @@
 """
 wf_analysis
-===========
 
-Pipeline for widefield imaging analysis.
+Widefield analysis framework.
 
-Typical usage from Python:
-
-    from wf_analysis import run_full_pipeline
-
-    run_full_pipeline("path/to/config.yaml")
-
-Or from the CLI (see scripts/run_pipeline.py):
-
-    python scripts/run_pipeline.py -c path/to/config.yaml
+Submodules (motion, dff, roi, traces, movies, manual_roi) can be used
+independently without importing the full pipeline.
 """
-
-from .pipeline import run_full_pipeline, load_config  # re-export main API
 
 __all__ = [
     "run_full_pipeline",
     "load_config",
 ]
 
-# Optional simple version – update manually or via packaging tools
-__version__ = "0.1.0"
+def run_full_pipeline(*args, **kwargs):
+    from .pipeline import run_full_pipeline as _run
+    return _run(*args, **kwargs)
+
+def load_config(*args, **kwargs):
+    from .pipeline import load_config as _load
+    return _load(*args, **kwargs)
